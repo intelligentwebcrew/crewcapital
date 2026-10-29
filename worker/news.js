@@ -10,17 +10,17 @@ function calendarErrorCode(error,stage){
   return stage==='fetch'||stage==='body'?'news_upstream_network':stage==='persist'?'news_cache_unavailable':'news_unavailable';
 }
 export async function loadCalendar(env,current=Date.now(),upstream=fetch){
-  const row=await env.DB.prepare("SELECT payload,fetched_at FROM crew_calendar WHERE id='ff_week'").bind().first();
-  const age=row?current-Date.parse(row.fetched_at):Infinity;
-  if(Number.isFinite(age)&&age>=-5000&&age<15*60000){
-    let saved;try{saved=JSON.parse(row.payload)}catch{/* A malformed cache must be refreshed from the source. */}
-    if(saved?.error){if(age<(saved.error==='news_upstream_http_429'?15*60000:60000))throw calendarError(calendarErrorCode({message:saved.error},'cache'),saved.diagnostics||{})}
-    else if(saved?.week===newsWeek(current)&&Array.isArray(saved.events)&&saved.events.length&&saved.fetchedAt===row.fetched_at)return saved;
-  }
   // Keep the last successful validated calendar independent of negative cache entries.
   const lastGood=await env.DB.prepare("SELECT payload,fetched_at FROM crew_calendar WHERE id='ff_week_success'").bind().first();
   let validFallback=null;
   if(lastGood){try{const saved=JSON.parse(lastGood.payload);if(saved.week===newsWeek(current)&&Array.isArray(saved.events)&&saved.events.length&&saved.fetchedAt===lastGood.fetched_at)validFallback=saved}catch{/* Invalid backup cannot be used. */}}
+  const row=await env.DB.prepare("SELECT payload,fetched_at FROM crew_calendar WHERE id='ff_week'").bind().first();
+  const age=row?current-Date.parse(row.fetched_at):Infinity;
+  if(Number.isFinite(age)&&age>=-5000&&age<15*60000){
+    let saved;try{saved=JSON.parse(row.payload)}catch{/* A malformed cache must be refreshed from the source. */}
+    if(saved?.error){if(age<(saved.error==='news_upstream_http_429'?15*60000:60000)){if(validFallback&&current-Date.parse(validFallback.fetchedAt)>=-5000&&current-Date.parse(validFallback.fetchedAt)<15*60000)return validFallback;throw calendarError(calendarErrorCode({message:saved.error},'cache'),saved.diagnostics||{})}}
+    else if(saved?.week===newsWeek(current)&&Array.isArray(saved.events)&&saved.events.length&&saved.fetchedAt===row.fetched_at)return saved;
+  }
   const diagnostics={stage:'fetch'};
   try{
     const response=await upstream(CALENDAR_URL,{headers:{accept:'application/json'},redirect:'manual',signal:AbortSignal.timeout(10000)});
