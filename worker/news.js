@@ -10,11 +10,15 @@ function calendarErrorCode(error,stage){
   return stage==='fetch'||stage==='body'?'news_upstream_network':stage==='persist'?'news_cache_unavailable':'news_unavailable';
 }
 export async function loadCalendar(env,current=Date.now(),upstream=fetch){
+  // Keep the last successful validated calendar independent of negative cache entries.
+  const lastGood=await env.DB.prepare("SELECT payload,fetched_at FROM crew_calendar WHERE id='ff_week_success'").bind().first();
+  let validFallback=null;
+  if(lastGood){try{const saved=JSON.parse(lastGood.payload);if(saved.week===newsWeek(current)&&Array.isArray(saved.events)&&saved.events.length&&saved.fetchedAt===lastGood.fetched_at)validFallback=saved}catch{/* Invalid backup cannot be used. */}}
   const row=await env.DB.prepare("SELECT payload,fetched_at FROM crew_calendar WHERE id='ff_week'").bind().first();
   const age=row?current-Date.parse(row.fetched_at):Infinity;
   if(Number.isFinite(age)&&age>=-5000&&age<15*60000){
     let saved;try{saved=JSON.parse(row.payload)}catch{/* A malformed cache must be refreshed from the source. */}
-    if(saved?.error){if(age<(saved.error==='news_upstream_http_429'?15*60000:60000))throw calendarError(calendarErrorCode({message:saved.error},'cache'),saved.diagnostics||{})}
+    if(saved?.error){if(age<(saved.error==='news_upstream_http_429'?15*60000:60000)){if(validFallback&&current-Date.parse(validFallback.fetchedAt)>=-5000&&current-Date.parse(validFallback.fetchedAt)<15*60000)return validFallback;throw calendarError(calendarErrorCode({message:saved.error},'cache'),saved.diagnostics||{})}}
     else if(saved?.week===newsWeek(current)&&Array.isArray(saved.events)&&saved.events.length&&saved.fetchedAt===row.fetched_at)return saved;
   }
   const diagnostics={stage:'fetch'};
@@ -33,12 +37,16 @@ export async function loadCalendar(env,current=Date.now(),upstream=fetch){
     const calendar=parseCalendar(raw,current);
     diagnostics.stage='persist';
     await env.DB.prepare("INSERT INTO crew_calendar(id,payload,fetched_at) VALUES('ff_week',?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,fetched_at=excluded.fetched_at").bind(JSON.stringify(calendar),calendar.fetchedAt).run();
+    await env.DB.prepare("INSERT INTO crew_calendar(id,payload,fetched_at) VALUES('ff_week_success',?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,fetched_at=excluded.fetched_at").bind(JSON.stringify(calendar),calendar.fetchedAt).run();
     return calendar;
   }catch(cause){
     const code=calendarErrorCode(cause,diagnostics.stage);
     diagnostics.errorType=['Error','TypeError','RangeError','SyntaxError','TimeoutError','AbortError'].includes(cause?.name)?cause.name:'Error';
     try{await env.DB.prepare("INSERT INTO crew_calendar(id,payload,fetched_at) VALUES('ff_week',?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,fetched_at=excluded.fetched_at").bind(JSON.stringify({error:code,diagnostics}),new Date(current).toISOString()).run()}
     catch{throw calendarError('news_cache_unavailable',diagnostics)}
+    // A transient 429 must not invalidate still-fresh trusted data.
+    // Retain its original timestamp; stale data NEVER authorizes orders.
+    if(validFallback&&current-Date.parse(validFallback.fetchedAt)>=-5000&&current-Date.parse(validFallback.fetchedAt)<15*60000)return validFallback;
     throw calendarError(code,diagnostics);
   }
 }
