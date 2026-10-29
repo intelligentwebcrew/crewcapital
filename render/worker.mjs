@@ -7,17 +7,20 @@ export function analysisIntervalMs(state){
 }
 export function eligible(state,now=Date.now()){
  if(state.environment!=='practice'||!state.autonomous||!state.aiConfigured||!state.brokerConfigured)return false;
+ const usage=state.dailyUsage;
+ if(usage&&(usage.day!==new Date(now).toISOString().slice(0,10)||usage.analyses>=state.maxDailyAnalyses||!usage.aiCanReserve))return false;
  const last=state.latest;
  if(!last)return true;
  if(last.status==='running'||['submitting','uncertain'].includes(last.order_state))return false;
- // Never increase the fixed cost ceiling; exhausted budget is reconsidered next UTC day.
- if(last.error==='ai_daily_budget'&&last.started_at.slice(0,10)===new Date(now).toISOString().slice(0,10))return false;
+ // Current persisted usage decides eligibility after budget edits or UTC rollover.
+ // Legacy servers without usage data remain blocked until the next UTC day.
+ if(!usage&&last.error==='ai_daily_budget'&&last.started_at.slice(0,10)===new Date(now).toISOString().slice(0,10))return false;
  return now-Date.parse(last.started_at)>=analysisIntervalMs(state);
 }
 export async function main(){
  const token=process.env.CREW_RUNNER_TOKEN;
  if(!/^[a-f0-9]{64}$/.test(token||''))throw Error('runner_secret_missing');
- let stopped=false,cycleBusy=false,state=null,lastStatus=0,lastLog=0,nextAttempt=0,lastAttempt=0,lastInterval=null,failures=0;
+ let stopped=false,cycleBusy=false,state=null,lastStatus=0,lastLog=0,nextAttempt=0,lastAttempt=0,lastSettings=null,failures=0;
  process.once('SIGTERM',()=>{stopped=true});process.once('SIGINT',()=>{stopped=true});
  const request=async(action)=>{
   const res=await fetch(SITE+'/api/runner/'+action,{method:action==='cycle'?'POST':'GET',headers:{authorization:'Bearer '+token,'content-type':'application/json'},...(action==='cycle'?{body:'{}'}:{}),redirect:'error',signal:AbortSignal.timeout(action==='cycle'?300000:20000)});
@@ -31,7 +34,8 @@ export async function main(){
    if(start-lastStatus>=10000||!state){state=await request('status');lastStatus=Date.now();if(state.environment!=='practice')throw Error('environment_rejected')}
    const currentState=state;
    const interval=analysisIntervalMs(currentState);
-   if(interval!==lastInterval){log('analysis_interval_updated',{minutes:interval/60000,dailyAIBudget:currentState.dailyAIBudget});lastInterval=interval;}
+   const settings=JSON.stringify({minutes:interval/60000,dailyAIBudget:currentState.dailyAIBudget,maxDailyAnalyses:currentState.maxDailyAnalyses});
+   if(settings!==lastSettings){log('analysis_settings_updated',JSON.parse(settings));lastSettings=settings;}
    if(currentState.autonomous&&currentState.brokerConfigured){
     const market=await request('market');
     if(market.status!=='paused'){
