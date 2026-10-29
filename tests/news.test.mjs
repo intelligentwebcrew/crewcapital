@@ -7,8 +7,12 @@ test('news source text cannot introduce executable instructions into guard',()=>
 
 import {loadCalendar} from '../worker/news.js';
 function memoryDB(initial=null){
-  let row=initial;
-  return {get row(){return row},DB:{prepare(sql){return {bind(...args){return {first:async()=>row,run:async()=>{row={payload:args[0],fetched_at:args[1]};return {success:true}}}}}}}};
+  const rows=new Map();
+  if(initial)rows.set('ff_week',initial);
+  return {get row(){return rows.get('ff_week')},get success(){return rows.get('ff_week_success')},DB:{prepare(sql){
+    const id=sql.includes("'ff_week_success'")?'ff_week_success':'ff_week';
+    return {bind(...args){return {first:async()=>rows.get(id)||null,run:async()=>{rows.set(id,{payload:args[0],fetched_at:args[1]});return {success:true}}}}};
+  }}};
 }
 const feed=()=>[{title:'GDP',country:'USD',impact:'High',date:'2026-10-29T08:30:00-04:00',forecast:'2%',previous:'1%'}];
 test('upstream HTTP failures preserve bounded diagnostics and cached failure reason',async()=>{
@@ -65,4 +69,19 @@ test('New York calendar week boundaries stay correct across daylight saving chan
   assert.equal(parseCalendar([row],Date.parse('2026-11-01T04:00:00Z')).week,'2026-11-01');
   assert.throws(()=>parseCalendar([row],Date.parse('2026-11-01T03:59:59Z')),/news_wrong_week/);
   assert.equal(parseCalendar([{...row,date:'2026-11-01T01:30:00-05:00'}],Date.parse('2026-11-01T06:00:00Z')).week,'2026-11-01');
+});
+
+test('fresh last successful feed survives a temporary 429 without extending freshness',async()=>{
+  const env=memoryDB();
+  await loadCalendar(env,current,async()=>Response.json(feed()));
+  assert(env.success);
+  // Force a refresh while the last successful calendar is only one minute old.
+  env.DB.prepare("INSERT INTO crew_calendar(id,payload,fetched_at) VALUES('ff_week',?,?)").bind('{',new Date(current+60000).toISOString()).run();
+  const fresh=await loadCalendar(env,current+120000,async()=>new Response('',{status:429}));
+  assert.equal(fresh.fetchedAt,new Date(current).toISOString());
+  assert.equal(newsGuard('EUR_GBP',fresh,current+120000).allowed,true);
+  const cached=await loadCalendar(env,current+180000,async()=>assert.fail('429 cooldown must not refetch'));
+  assert.equal(cached.fetchedAt,fresh.fetchedAt);
+  await assert.rejects(loadCalendar(env,current+16*60000,async()=>assert.fail('429 cooldown must not refetch')),{message:'news_upstream_http_429'});
+  assert.equal(newsGuard('EUR_GBP',fresh,current+16*60000).allowed,false);
 });
