@@ -1,0 +1,15 @@
+import fs from 'node:fs';
+const html=fs.readFileSync('worker/page.html','utf8');
+const backend=fs.readFileSync('worker/backend.js','utf8').replace('export async function api','async function api');
+const news=fs.readFileSync('worker/news.js','utf8').replaceAll('export async function','async function').replaceAll('export function','function');
+const universe=fs.readFileSync('worker/universe.js','utf8').replaceAll('export function','function');
+const measurement=fs.readFileSync('worker/measurement.js','utf8').replaceAll('export const','const').replaceAll('export function','function');
+const agents=fs.readFileSync('worker/agents.js','utf8').replace(/^import .*?;\n/gm,'').replaceAll('export async function','async function').replaceAll('export function','function');
+const assets=Object.fromEntries(['worker/client.js','worker/activity.js','worker/office.js','vendor/three.module.js','vendor/three.core.js','vendor/SVGRenderer.js','vendor/Projector.js'].map(path=>['/'+path.replace('worker/',''),fs.readFileSync(path,'utf8')]));
+const preferences=fs.readFileSync('worker/preferences.js','utf8').replaceAll('export async function','async function').replaceAll('export const','const');
+const mcp=fs.readFileSync('worker/mcp.js','utf8').replace(/^import .*?;\n/gm,'').replaceAll('export function','function');
+const auth=fs.readFileSync('worker/auth.js','utf8').replaceAll('export async function','async function');
+const router=fs.readFileSync('worker/router.js','utf8').replace(/^import .*?;\n/gm,'').replaceAll('export function','function');
+const loginPage=fs.readFileSync('worker/login.html','utf8');
+const loginScript=fs.readFileSync('worker/login.js','utf8');
+fs.writeFileSync('worker/index.js',[news,universe,measurement,agents,backend.replace('const BASE','const LEGACY_BASE').replaceAll('`${BASE}', '`${LEGACY_BASE}'),auth,preferences,mcp,router,'const page='+JSON.stringify(html)+';','const assets='+JSON.stringify(assets)+';','const loginPage='+JSON.stringify(loginPage)+';','const loginScript='+JSON.stringify(loginScript)+';','const crewMcp=createCrewMcp({agentApi});export default createApp({page,loginPage,loginScript,assets,agentApi,api,preferencesApi,crewMcp});'].join('\n'));

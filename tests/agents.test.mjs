@@ -1,0 +1,8 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {assessRisk,validateProposal,encryptCredential,decryptCredential} from '../worker/agents.js';
+const p={action:'BUY',reason:'trend',stopPips:15,takeProfitPips:30};
+const market={bid:1.1000,ask:1.1001,time:new Date().toISOString(),status:'tradeable'};
+const account={currency:'USD',NAV:'500',marginAvailable:'500',openTradeCount:0,openPositionCount:0,pendingOrderCount:0};
+test('risk bounds 500 virtual budget and 2.50 USD risk',()=>{const r=assessRisk(p,account,market,500);assert(r.units>0);assert(r.plannedRisk<=2.5);assert(r.units*market.ask<=1000)});
+test('blocks daily loss, open positions, non USD and stale prices',()=>{for(const [a,m,b] of [[{...account,NAV:'489'},market,500],[{...account,openPositionCount:1},market,500],[{...account,currency:'EUR'},market,500],[account,{...market,time:'2020-01-01'},500]])assert.throws(()=>assessRisk(p,a,m,b))});
+test('invalid model proposals rejected',()=>{assert.throws(()=>validateProposal({...p,action:'SHORT'}));assert.throws(()=>validateProposal({...p,stopPips:0}));assert.throws(()=>validateProposal({...p,takeProfitPips:1}));assert.throws(()=>validateProposal({...p,reason:2}));assert.equal(validateProposal({action:'HOLD',reason:'wait',stopPips:0,takeProfitPips:0}).action,'HOLD')});
+test('credential encrypted and authenticated',async()=>{const env={CREDENTIAL_ENCRYPTION_KEY:'a'.repeat(64)};const plain={token:'not-a-real-key',accountId:'101-001-12345-001'};const encrypted=await encryptCredential(plain,env,'owner');assert(!encrypted.includes(plain.token));assert.deepEqual(await decryptCredential(encrypted,env,'owner'),plain);await assert.rejects(()=>decryptCredential(encrypted,env,'other'))});

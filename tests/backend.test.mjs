@@ -1,0 +1,10 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {api} from '../worker/backend.js';
+const env={OANDA_DEMO_TOKEN:'test-secret',OANDA_DEMO_ACCOUNT_ID:'101-001-12345-001'};
+const req=(p,method='GET',auth=true)=>new Request('https://example.test/api/oanda/'+p,{method,headers:auth?{'oai-authenticated-user-id':'owner'}:{}});
+test('unauthenticated access rejected',async()=>assert.equal((await api(req('summary','GET',false),env)).status,401));
+test('orders and mutations unavailable',async()=>{assert.equal((await api(req('summary','POST'),env)).status,405);assert.equal((await api(req('orders'),env)).status,404)});
+test('missing secrets reported without disclosure',async()=>{const r=await api(req('status'),{});assert.equal((await r.json()).configured,false);assert.equal((await api(req('summary'),{})).status,503)});
+test('live account rejected before network',async()=>assert.equal((await api(req('summary'),{...env,OANDA_DEMO_ACCOUNT_ID:'001-001-12345-001'},()=>{throw Error('must not call')})).status,503));
+test('fixed demo endpoint, read only, whitelisted output',async()=>{let seen;const r=await api(req('summary'),env,async(u,o)=>{seen=[u,o];return Response.json({account:{currency:'USD',balance:'500',NAV:'500',unrealizedPL:'0',openTradeCount:0,secret:'hidden'}})});assert.match(seen[0],/^https:\/\/api-fxpractice.oanda.com\/v3\/accounts\/101-/);assert.equal(seen[1].method,'GET');assert.equal(seen[1].redirect,'manual');const body=await r.text();assert(!body.includes('hidden'));assert(!body.includes(env.OANDA_DEMO_TOKEN));assert.equal(JSON.parse(body).balance,'500')});
+test('upstream errors sanitized',async()=>{const r=await api(req('summary'),env,async()=>new Response('test-secret',{status:401}));assert.equal(r.status,502);assert(!(await r.text()).includes('test-secret'))});
+test('prices sanitized',async()=>{const r=await api(req('prices'),env,async()=>Response.json({prices:[{instrument:'EUR_USD',time:'now',status:'tradeable',bids:[{price:'1.1'}],asks:[{price:'1.2'}],other:'omit'}]}));assert.equal((await r.json()).prices[0].bid,'1.1')});
